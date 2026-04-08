@@ -1,6 +1,7 @@
 package ru.dgis.sdk.demo
 
 import android.os.Bundle
+import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -18,26 +19,35 @@ import com.google.android.material.bottomsheet.BottomSheetBehavior.STATE_COLLAPS
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.tabs.TabLayout
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import ru.dgis.sdk.Context
 import ru.dgis.sdk.ScreenDistance
 import ru.dgis.sdk.ScreenPoint
 import ru.dgis.sdk.await
+import ru.dgis.sdk.demo.common.asFlow
 import ru.dgis.sdk.demo.common.updateMapCopyrightPosition
 import ru.dgis.sdk.demo.databinding.ActivityNavigationBinding
 import ru.dgis.sdk.demo.vm.NavigationViewModel
 import ru.dgis.sdk.geometry.point
+import ru.dgis.sdk.map.AttributeValue
 import ru.dgis.sdk.map.CameraChangeReason
 import ru.dgis.sdk.map.DgisMapObject
 import ru.dgis.sdk.map.GraphicsPreset
 import ru.dgis.sdk.map.Map
 import ru.dgis.sdk.map.MapView
+import ru.dgis.sdk.map.MyLocationMapObjectSource
 import ru.dgis.sdk.map.TouchEventsObserver
 import ru.dgis.sdk.map.statefulChanges
 import ru.dgis.sdk.navigation.DefaultNavigationControls
 import ru.dgis.sdk.navigation.NavigationView
 import ru.dgis.sdk.navigation.State
 import ru.dgis.sdk.routing.RouteSearchPoint
+import kotlin.math.abs
 
 class NavigationActivity : AppCompatActivity(), TouchEventsObserver {
     private val sdkContext: Context by lazy { application.sdkContext }
@@ -54,6 +64,8 @@ class NavigationActivity : AppCompatActivity(), TouchEventsObserver {
     private lateinit var routeEditorSettingsView: View
     private lateinit var navigationView: NavigationView
     private lateinit var startNavigationButton: FloatingActionButton
+    private val scope = CoroutineScope(Dispatchers.Default)
+    private var job: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -85,6 +97,30 @@ class NavigationActivity : AppCompatActivity(), TouchEventsObserver {
                             )
                         }
                 )
+                job = scope.launch {
+                    it.camera
+                        .statefulChanges(CameraChangeReason.POSITION) { it.camera.position.zoom.value }
+                        .asFlow()
+                        .distinctUntilChanged { old, new ->
+                            abs(old - new) < 0.01f
+                        }
+                        .map { zoom ->
+                            zoom * 5f
+                        }
+                        .collect { size ->
+                            it.sources
+                                .filterIsInstance<MyLocationMapObjectSource>()
+                                .forEach { source ->
+                                    Log.i("HGH-2576", "$size")
+                                    scope.launch {
+                                        source.item.objectAttributes.setAttributeValue(
+                                            "circle_diameter_zpt",
+                                            AttributeValue(size),
+                                        )
+                                    }
+                                }
+                        }
+                }
                 when (it.graphicsPresetHintChannel.value) {
                     GraphicsPreset.LITE -> graphicPreset.check(R.id.litePreset)
                     GraphicsPreset.NORMAL -> graphicPreset.check(R.id.normalPreset)
@@ -283,5 +319,6 @@ class NavigationActivity : AppCompatActivity(), TouchEventsObserver {
         closeables.forEach {
             it?.close()
         }
+        job?.cancel()
     }
 }
